@@ -1,0 +1,251 @@
+---
+title: "Wine Quality Analysis"
+author: "Swastik Bhowmick"
+date: "2023-09-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dataset
+
+Here we have worked on a dataset which is based on the quality of the Portuguese **Vinho Verde** wine, taken from https://www.kaggle.com/datasets/uciml/red-wine-quality-cortez-et-al-2009.
+
+# Objective
+
+Here , we want to predict the quality of wine, ie whether a particular wine is good or bad using logistic regression based on the vales of the covariates in the dataset.
+
+Before beginning our analysis, we call the following libraries.
+```{r warning=FALSE,message=FALSE}
+library(tidyverse)
+library(ggcorrplot)
+library(grid)
+library(car)
+library(gridExtra)
+library(caTools)
+library(caret)
+library(class)
+library(performance)
+library(glue)
+library(pROC)
+library(Metrics)
+```
+
+# Data Description
+
+These are the features in the dataset.
+
+```{r}
+d=read.csv("E:/logistic/WineQuality.csv")
+glimpse(d)
+```
+
+# Exploratory Data Analysis
+
+Here, we are interested in working with the white variant of the Portuguese **Vinho Verde** wine, hence we have to take a subset of the data accordingly.
+
+```{r}
+d1=d%>%filter(type=="white")%>%select(-type)
+```
+
+Then we check for the missing values in the dataset.
+
+```{r}
+colSums(is.na(d1))
+```
+
+Here we replace the missing values by the respective means of those variables.
+
+```{r}
+all_column_mean <- apply(d1, 2, mean, na.rm=TRUE)
+for(i in colnames(d1))
+  d1[,i][is.na(d1[,i])] <- all_column_mean[i]
+```
+
+Now we have a dataset containing only white wine and without any missing values. Now in order to apply logistic regression, we transform the response variable that is **quality** of the wine into a binary variable which takes value 1if rating is greater than 5 and 0 otherwise.
+
+```{r}
+d1=d1%>%mutate(qual= ifelse(quality>5,1,0))%>%select(-quality)
+```
+
+Let us do the count plot of the response variable
+
+```{r}
+d1 %>% count(qual) %>% 
+  ggplot(aes(x = qual, y = n)) + geom_col(fill ='red',colour = 'black',  width = 0.1) +
+  labs(y = 'Count',x="quality") +
+  theme_minimal()
+```
+
+Now we will do some visualization of the distribution of each covariate with respect to the quality of wine.
+First we do the boxplot of the variables.
+```{r}
+ggplot(data=d1,aes(fill=as.factor(qual),y=fixed.acidity))+geom_boxplot()+ggtitle("boxplot of fixed acidity")+theme(plot.title=element_text(hjust=0.5))
+
+```
+```{r echo=FALSE}
+ggplot(data=d1,aes(fill=as.factor(qual),y=volatile.acidity))+geom_boxplot()+ggtitle("boxplot of volatile acidity")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=citric.acid))+geom_boxplot()+ggtitle("boxplot of citric acid")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=residual.sugar))+geom_boxplot()+ggtitle("boxplot of residual sugar")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=chlorides))+geom_boxplot()+ggtitle("boxplot of chlorides")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=free.sulfur.dioxide))+geom_boxplot()+ggtitle("boxplot of free sulfur dioxide")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=total.sulfur.dioxide))+geom_boxplot()+ggtitle("boxplot of total sulfur dioxide")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=density))+geom_boxplot()+ggtitle("boxplot of density")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=pH))+geom_boxplot()+ggtitle("boxplot of pH")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=sulphates))+geom_boxplot()+ggtitle("boxplot of sulphates")+theme(plot.title=element_text(hjust=0.5))
+
+ggplot(data=d1,aes(fill=as.factor(qual),y=alcohol))+geom_boxplot()+ggtitle("boxplot of alcohol")+theme(plot.title=element_text(hjust=0.5))
+
+
+```
+***Comment:*** Say, for example, we take the distribution of alcohol with respect to quality of wine. Here, we can observe that as the alcohol quantity increases, the quality of wine tends to be good. We can make similiar observations regarding other covariates with respect the quality of wine as well.
+
+Now, let us plot the correlations between the variables using a correlation heatmap.
+
+```{r}
+d1%>%select(-qual)%>%cor()%>%ggcorrplot(lab=T,type="upper")
+```
+
+The heatmap indicates that there multicollinearity present in the data. To check which of the predictors are responsible for it, we go for checking variance inflation factor.
+
+
+Before applying vif, we split the dataset into training and testing sets.
+```{r}
+set.seed(48)
+d1$id=1:nrow(d1)
+train=d1%>%sample_frac(0.75)
+test=anti_join(d1,train,by='id')
+train=train%>%select(-id)
+test=test%>%select(-id)
+```
+
+Now we check for multicollinearity in the training data.
+
+```{r}
+m=glm(qual~.,data=train,family=binomial(link="logit"))
+vif(m)
+```
+It is evident that `density` has the highest vif that is why we remove it from the model.
+
+Let see the vifs after removing `density`.
+
+```{r}
+m1=glm(qual~.,data=train%>%select(-density),family=binomial(link="logit"))
+vif(m1)
+```
+The vifs of all of the variables have removed significantly after the removal of `density` from the model.
+
+Let take a look at the summary table of the model.
+
+```{r}
+summary(m1)
+```
+The p values of the predictors `citric acid,chlorides` and `pH` are larger than 0.05, hence these predictors are not significant in predicting the quality of wine. So we drop them from the model.
+
+```{r}
+m2=glm(qual~.,data=train%>%select(-c(density,citric.acid,chlorides,pH)),family=binomial(link="logit"))
+summary(m2)
+```
+
+Now we proceed to find the optimal threshold probability for classifying wine into good or bad.
+
+```{r}
+y_train=train$qual
+p1=predict(m1,type="response")
+metric=function(a){
+   Y_i_hat=ifelse(p1>=a,1,0)
+    sens=length(y_train[Y_i_hat==1&y_train==1])/length(y_train[y_train==1])
+    spec=length(y_train[Y_i_hat==0&y_train==0])/length(y_train[y_train==0])
+    acc=length(y_train[(Y_i_hat==1&y_train==1)|(Y_i_hat==0&y_train==0)])/length(y_train)
+    return(c(sens,spec,acc,sens*spec))
+}
+M=matrix(0,nrow=length(sort(p1)),ncol=4)
+for(i in 1:length(p1)){
+  M[i,]=metric(sort(p1)[i])
+}
+Metric=rep(c("sensitivity","specificity","accuracy","sensitivity*specificity"),each=length(p1))
+val=array(M)
+prob=rep(sort(p1),4)
+metric_d=data.frame(Metric,val,prob)
+ggplot(data=metric_d,aes(x=prob,y=val,colour=Metric))+geom_line()
+```
+
+Here we have plotted the values of accuracy,sensitivity, specificity ,accuracy and the product of specificity and sensitivity vs the predicted probabilities.
+
+The threshold probability that value where the product specificity and sensitivity is highest. It is given by 
+
+```{r}
+t_p=sort(p1)[M[,4]==max(M[,4])];t_p
+```
+The roc curve is given as follows:-
+
+```{r message=FALSE}
+y_pred=ifelse(p1>t_p,1,0)
+rocobj=roc(y_train,p1)
+roc1=data.frame("TPR"=M[,1],"FPR"=1-M[,2])
+ggplot(roc1,aes(x=FPR,y=TPR))+geom_line()+geom_segment(x=0,y=0,xend=1,yend=1)+ggtitle("ROC Curve")+annotate("text",label=glue("area under curve={pROC::auc(rocobj)}"),x=1,y=0)+theme_minimal()
+```
+
+
+
+The assosciated confusion matrix is given by
+
+```{r}
+
+cm=confusionMatrix(data=factor(y_pred),reference=factor(y_train))
+M1=as.matrix(cm$table);M1
+```
+The performance metrics are given below
+```{r}
+accuracy=sum(diag(M1))/sum(M1);accuracy
+precision=M1[2,2]/sum(M1[2,]);precision
+recall=M1[2,2]/sum(M1[,2]);recall
+f1_score=(2*precision*recall)/(precision+recall);f1_score
+
+```
+***Comment:***
+
+* Here, the accuracy comes out to be $0.7389$, which means that the threshold probability of 0.658 can accurately predict the quality of wine $73.89$% times.
+
+* Here the recall comes out to be $0.7489$ and the precision comes out to be $0.8390$. Here a lower value of recall as compared to precision indicates a higher value of false negatives which means that a good quality wine being wrongly classified as bad is comparatively high.
+
+# Test Data Analysis
+
+After fitting the model on the training data, we see how the model works on unforeseen data, ie on the test data. We will compare the actual and predicted values of the wine quality and compare them with a confusion matrix.
+
+```{r}
+p2=predict.glm(m1,newdata=test,type="response")
+y_t_p=ifelse(p2>=t_p,1,0)
+y_test=test$qual
+cm1=confusionMatrix(data=factor(y_t_p),reference=factor(y_test))
+M2=as.matrix(cm1$table)
+accuracy1=sum(diag(M2))/sum(M2);accuracy1
+precision1=M2[2,2]/sum(M2[2,]);precision1
+recall1=M2[2,2]/sum(M2[,2]);recall1
+f1_score1=(2*precision1*recall1)/(precision1+recall1);f1_score1
+
+```
+
+Now we will construct the ROC curve for the testing data
+
+```{r message=FALSE}
+M3=matrix(0,ncol=4,nrow=length(p2))
+for( i in 1:length(p2)){
+  M3[i,]=metric(sort(p1)[i])
+}
+rocobj1=roc(y_test,p2)
+roc2=data.frame("TPR"=M[,1],"FPR"=1-M[,2])
+ggplot(roc2,aes(x=FPR,y=TPR))+geom_line()+geom_segment(x=0,y=0,xend=1,yend=1)+ggtitle("ROC Curve")+annotate("text",label=glue("area under curve={pROC::auc(rocobj1)}"),x=1,y=0)+theme_minimal()
+```
+
+The area under curve for the testing dataset is $0.763$, which implies that the model works well even on the unforseen data, which shows that the fit is good.
